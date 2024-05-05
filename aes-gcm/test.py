@@ -268,6 +268,10 @@ def bhex2hexstring(input):
     hex_string = binascii.hexlify(input).decode('utf-8')
     return hex_string
 
+def xor_iv_with_count(iv, count):
+    count = 4
+    modified_iv = bytes(iv_byte ^ count for iv_byte in iv)
+    return modified_iv
 
 
 if __name__ == "__main__":
@@ -322,12 +326,13 @@ if __name__ == "__main__":
 
 
     # ============================= Jason test case 2 ========================================================
+    print("=== Keying materials encryption ===")
 
-    key = bytearray.fromhex('5ff68b8cf16db9e4ca8bf5720558a5c5')
-    iv = bytearray.fromhex('db31b620e34156bab60faa91')
+    key = bytearray.fromhex('de2f4c7672723a692319873e5c227606691a32d1c59d8b9f51dbb9352e9ca9cc')
+    iv = bytearray.fromhex('bb007956f474b25de902432f')
     # PText = "ping"
     # hex_PText = string2hex(PText)
-    hex_PText = '00207cd2010000010000000000000377777706676f6f676c6503636f6d0000010001'                    # Client Data: 4bytes, Record Type: 1 byte
+    hex_PText = '70 69 6e 67 17'                    # Client Data: 4bytes, Record Type: 1 byte
     plaintext = bytearray.fromhex(hex_PText)
     print("Input text", hex_PText)
     associated_data = bytearray.fromhex('1703030015')   # This is record header
@@ -337,17 +342,20 @@ if __name__ == "__main__":
     print("Ciphertext:", bhex2hexstring(ciphertext))
     print("Auth Tag", bhex2hexstring(auth_tag))
 
-    print("====================")
+    print(".... running in pieces.....")
 
-    p1 = bytearray.fromhex("68 65 6c 6c 6f 20 77 6f 72 6c 64 2e 20 54 68 69 73 20 69 73 20 61 20 6d 65 73 73 61 67 65 20 31")
+    p1 = bytearray.fromhex("70 69 6e 67 17")
     c1, e1 = jason_aes_gcm_encrypt(p1, key, iv, associated_data, tag_length)
-    index = 1
+    print("Trying to extract keying materials........")
+    index = 0
     cipher = jason_GCTR_xor(p1, e1, index)
     print("Ori cipher", bhex2hexstring(c1))
     print("The resulting cipher at block", index, ":", bhex2hexstring(cipher))
 
 
   # ============================= Jason test case 3 ========================================================
+    print("========= case 3 ===========")
+
 
     key = bytearray.fromhex('81913c9c94f6feb9d8a441eabb69a0f3')
     iv = bytearray.fromhex('509037d33d3ceed8df046d8d')
@@ -362,4 +370,6 @@ if __name__ == "__main__":
     print("Plaintext :", hex_PText)
     print("Ciphertext:", bhex2hexstring(ciphertext))
     print("Auth Tag", bhex2hexstring(auth_tag))
+
+
     
