@@ -1,0 +1,37 @@
+from circuit import Circuit
+
+#test vector from SPDZ 57811460909138771071931939740208549692
+
+#Following is hexstring for "Hellooo JasonLoh"
+#hex 0x49206c6f7665204d656469756d616161)
+#int 97201996522976691879970772078538350945
+
+
+sb128 = sbits.get_type(128)
+
+key = sb128.get_input_from(0)
+plaintext = sb128.get_input_from(1)
+#print_ln("key = %s", key.reveal())
+#print_ln("plaintext = %s", plaintext.reveal())
+n = 1
+aes128 = Circuit('aes_128')
+ciphertexts = aes128(sbitvec([key] * n), sbitvec([plaintext] * n))
+#ciphertexts.elements()[n - 1].reveal().print_reg()
+
+#print_ln("The final result: %s", ciphertexts.elements()[n - 1].reveal())
+
+key2 = sb128.get_input_from(0)
+#print_ln_to(1,"Test: %s", key2.equal(plaintext).reveal())
+#print_ln_if(key2.equal(plaintext).reveal(),"The final result: %s", ciphertexts.elements()[n - 1].reveal())
+
+
+'''
+@if_( key2.equal(plaintext).reveal() )
+def _():
+	print_ln("The final result: %s", ciphertexts.elements()[n - 1].reveal())
+'''
+
+if( key2.equal(plaintext).reveal() ):
+	print_ln("The final result: %s", ciphertexts.elements()[n - 1].reveal())
+else:
+	print_ln("Detected MB input error")

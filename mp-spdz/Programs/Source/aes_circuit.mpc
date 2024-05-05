@@ -1,0 +1,30 @@
+from circuit import Circuit
+
+
+sb128 = sbits.get_type(128)
+
+for i in 0, 1:
+    input = sb128.get_input_from(i)
+    input.reveal().print_reg()
+
+
+key = sb128(0x2b7e151628aed2a6abf7158809cf4f3c)
+plaintext = sb128(0x6bc1bee22e409f96e93d7e117393172a)
+
+
+
+#Following is hexstring for "Hellooo JasonLoh"
+#plaintext = sb128(0x49206c6f7665204d656469756d616161)
+
+#print_ln(plaintext.reveal().print_reg())
+
+
+#Instead of running 1000times, let it run once
+#n = 1000
+n=1
+aes128 = Circuit('aes_128')
+ciphertexts = aes128(sbitvec([key] * n), sbitvec([plaintext] * n))
+print_ln("Result:")
+ciphertexts.elements()[n - 1].reveal().print_reg()
+
+
