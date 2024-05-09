@@ -1,6 +1,22 @@
 Using statistical security parameter 40
-The keying material: 78214076581731661160096127236885114775
+No modulus found in Player-Data//2-Dp-128/Params-Data, generating 128-bit prime
+The keying material: -49647282631028740792246021233847733757
+Compiler: ./compile.py jason_aes -l
+	192 triples of binary secret left
+Spent 0.0191645 seconds (0.001783 MB, 380 rounds) on the online phase and 0.060692 seconds (0.155194 MB, 107 rounds) on the preprocessing/offline phase.
+Communication details:
+Exchanging one-to-one 0.00696 MB in 27 rounds, taking 0.00245475 seconds
+Receiving directly 0.001751 MB in 189 rounds, taking 0.0108117 seconds
+Receiving one-to-one 0.148234 MB in 40 rounds, taking 0 seconds
+Sending directly 0.001751 MB in 189 rounds, taking 0.00468289 seconds
+Sending one-to-one 0.148234 MB in 40 rounds, taking 0 seconds
+Sending/receiving 3.2e-05 MB in 2 rounds, taking 0.000118169 seconds
+CPU time = 0.0752809
 The following benchmarks are including preprocessing (offline phase).
-Time = 0.0831332 seconds 
-Data sent = 0.156977 MB in ~487 rounds (party 0 only; use '-v' for more details)
+Time = 0.0815914 seconds 
+Data sent = 0.156977 MB in ~487 rounds (party 0 only)
 Global data sent = 0.313954 MB (all parties)
+Actual cost of program:
+  Type bit
+          6527        Triples
+Command line: /home/kali/Desktop/YinYang-MB/mp-spdz/Scripts/../semi-party.x 0 jason_aes -v -pn 13682 -h localhost -N 2

@@ -11,6 +11,8 @@ import binascii
 import math
 from implementing_aes import aes_encryption
 
+import time
+
 
 def xor_bytes(bytes_a: bytes, bytes_b: bytes) -> bytes:
     return bytes([a ^ b for (a, b) in zip(bytes_a, bytes_b)])
@@ -192,12 +194,29 @@ def jason_aes_gcm_encrypt(P, K, IV, A, t):
     # Step 3
     C = GCTR(K, INC_32(J_0), P) # Compute H2?
     temp = GCTR_extract(K, INC_32(J_0), P)
-    print("The extracted key materials", temp)
+    # print("The extracted key materials", temp)
     cipher = GCTR_xor(P, temp)
-    print("The resulting ciphers", cipher)
-    print("Converting to hex string", bhex2hexstring(cipher))
+    # print("The resulting ciphers", cipher)
+    # print("Converting to hex string", bhex2hexstring(cipher))
 
     return C, temp
+
+def jason_aes_gcm_extract(P, K, IV):
+    # Step 2
+    len_IV = len(IV) * 8
+    if len_IV == 96: #Most likely we will do this...
+        J_0 = IV + b'\x00\x00\x00\x01'
+    else:     # Step 1
+        H = aes_encryption(b'\x00' * (128 // 8), K) # Compute H1 on input 0000000000 and K
+        s = 128 * math.ceil(len_IV / 128) - len_IV
+        O_s_64 = b'\x00' * ((s + 64) // 8)
+        len_IV_64 = int.to_bytes(len_IV, 8, 'big')
+        J_0 = GHASH(H, IV + O_s_64 + len_IV_64) 
+
+    # Step 3
+    temp = GCTR_extract(K, INC_32(J_0), P)
+
+    return temp
 
 def aes_gcm_encrypt(P, K, IV, A, t):
 
@@ -217,10 +236,10 @@ def aes_gcm_encrypt(P, K, IV, A, t):
     # Step 3
     C = GCTR(K, INC_32(J_0), P) # Compute H2?
     temp = GCTR_extract(K, INC_32(J_0), P)
-    print("The extracted key materials", temp)
+    # print("The extracted key materials", temp)
     cipher = GCTR_xor(P, temp)
-    print("The resulting ciphers", cipher)
-    print("Converting to hex string", bhex2hexstring(cipher))
+    # print("The resulting ciphers", cipher)
+    # print("Converting to hex string", bhex2hexstring(cipher))
 
     # Step 4
     len_C, len_A = len(C) * 8, len(A) * 8
@@ -273,20 +292,22 @@ def xor_iv_with_count(iv, count):
     modified_iv = bytes(iv_byte ^ count for iv_byte in iv)
     return modified_iv
 
+def tohex(val, nbits=128):
+  return hex((val + (1 << nbits)) % (1 << nbits))
 
 if __name__ == "__main__":
 
     # NIST Special Publication 800-38D
 
     # NIST test vector 1
-    # key = bytearray.fromhex('11754cd72aec309bf52f7687212e8957')
-    # iv = bytearray.fromhex('3c819d9a9bed087615030b65')
+    # key = bytes.fromhex('11754cd72aec309bf52f7687212e8957')
+    # iv = bytes.fromhex('3c819d9a9bed087615030b65')
 
     # PText = "abcdefghabcdefgh"
     # hex_PText = string2hex(PText)
-    # plaintext = bytearray.fromhex(hex_PText)
+    # plaintext = bytes.fromhex(hex_PText)
     # print("Input text", hex_PText)
-    # associated_data = bytearray.fromhex('')
+    # associated_data = bytes.fromhex('')
     # tag_length = 128
 
     # ciphertext, auth_tag = aes_gcm_encrypt(plaintext, key, iv, associated_data, tag_length)
@@ -303,14 +324,14 @@ if __name__ == "__main__":
 
     # ============================= Jason test case ========================================================
 
-    key = bytearray.fromhex('de2f4c7672723a692319873e5c227606691a32d1c59d8b9f51dbb9352e9ca9cc')
-    iv = bytearray.fromhex('bb007956f474b25de902432f')
+    key = bytes.fromhex('de2f4c7672723a692319873e5c227606691a32d1c59d8b9f51dbb9352e9ca9cc')
+    iv = bytes.fromhex('bb007956f474b25de902432f')
     # PText = "ping"
     # hex_PText = string2hex(PText)
     hex_PText = '70696e6717'                    # Client Data: 4bytes, Record Type: 1 byte
-    plaintext = bytearray.fromhex(hex_PText)
+    plaintext = bytes.fromhex(hex_PText)
     print("Input text", hex_PText)
-    associated_data = bytearray.fromhex('1703030015')   # This is record header
+    associated_data = bytes.fromhex('1703030015')   # This is record header
     tag_length = 128
     ciphertext, auth_tag = aes_gcm_encrypt(plaintext, key, iv, associated_data, tag_length)
     print("Plaintext :", hex_PText)
@@ -328,23 +349,23 @@ if __name__ == "__main__":
     # ============================= Jason test case 2 ========================================================
     print("=== Keying materials encryption ===")
 
-    key = bytearray.fromhex('de2f4c7672723a692319873e5c227606691a32d1c59d8b9f51dbb9352e9ca9cc')
-    iv = bytearray.fromhex('bb007956f474b25de902432f')
+    key = bytes.fromhex('de2f4c7672723a692319873e5c227606691a32d1c59d8b9f51dbb9352e9ca9cc')
+    iv = bytes.fromhex('bb007956f474b25de902432f')
     # PText = "ping"
     # hex_PText = string2hex(PText)
     hex_PText = '70 69 6e 67 17'                    # Client Data: 4bytes, Record Type: 1 byte
-    plaintext = bytearray.fromhex(hex_PText)
+    plaintext = bytes.fromhex(hex_PText)
     print("Input text", hex_PText)
-    associated_data = bytearray.fromhex('1703030015')   # This is record header
+    associated_data = bytes.fromhex('1703030015')   # This is record header
     tag_length = 128
     ciphertext, auth_tag = aes_gcm_encrypt(plaintext, key, iv, associated_data, tag_length)
     print("Plaintext :", hex_PText)
     print("Ciphertext:", bhex2hexstring(ciphertext))
-    print("Auth Tag", bhex2hexstring(auth_tag))
+    print("Auth Tag", bhex2hexstring(auth_tag), auth_tag)
 
     print(".... running in pieces.....")
 
-    p1 = bytearray.fromhex("70 69 6e 67 17")
+    p1 = bytes.fromhex("70 69 6e 67 17")
     c1, e1 = jason_aes_gcm_encrypt(p1, key, iv, associated_data, tag_length)
     print("Trying to extract keying materials........")
     index = 0
@@ -352,24 +373,48 @@ if __name__ == "__main__":
     print("Ori cipher", bhex2hexstring(c1))
     print("The resulting cipher at block", index, ":", bhex2hexstring(cipher))
 
+    t = aes_gcm_authenticated_decryption(key, iv, auth_tag, associated_data, c1)
+    print(t)
 
   # ============================= Jason test case 3 ========================================================
     print("========= case 3 ===========")
 
 
-    key = bytearray.fromhex('81913c9c94f6feb9d8a441eabb69a0f3')
-    iv = bytearray.fromhex('509037d33d3ceed8df046d8d')
+    key = bytes.fromhex('b3114ab03eda089383af182f2ec50a17')
+    iv = bytes.fromhex('752ed29b698414fc525ea027')
     PText = "GET /questions/21153262/sending-html-through-python-socket-server HTTP/1.1\r\nHost: stackoverflow.com\r\n\r\n"
     hex_PText = string2hex(PText)
     # hex_PText = '00207cd2010000010000000000000377777706676f6f676c6503636f6d0000010001'                    # Client Data: 4bytes, Record Type: 1 byte
-    plaintext = bytearray.fromhex(hex_PText)
+    # hex_PText = '474554202f7175657374696f6e732f32313135333236322f73656e64696e672d68746d6c2d7468726f7567682d707974686f6e2d736f636b65742d73657276657220485454502f312e310d0a486f73743a20737461636b6f766572666c6f772e636f6d0d0a0d0aee418225e3d956069bd21679152522c2'
+    plaintext = bytes.fromhex(hex_PText)
     print("Input text", hex_PText)
-    associated_data = bytearray.fromhex('1703030078')   # This is record header
+    associated_data = bytes.fromhex('1703030078')   # This is record header
     tag_length = 128
     ciphertext, auth_tag = aes_gcm_encrypt(plaintext, key, iv, associated_data, tag_length)
     print("Plaintext :", hex_PText)
     print("Ciphertext:", bhex2hexstring(ciphertext))
     print("Auth Tag", bhex2hexstring(auth_tag))
 
+    print("========")
+    start_time = time.time()
+    for i in range(1):
+        e = jason_aes_gcm_extract(plaintext, key, iv)
+    print("Time taken (1 times):", time.time() - start_time)
+    print("The keying materials:", bhex2hexstring(e[0]))
+    # print("Selecting blocks....", bhex2hexstring(c[0:16]))
+    #test_c = bytes.fromhex('34e7c5df0af10cc9a6355ac3784850c1e6')
+    index = 0
+    block_text = jason_GCTR_xor(ciphertext, e, index)
+    l = len(ciphertext)
+    i = 16 * index
+    print("Ori additional block:", bhex2hexstring(ciphertext[i:i+16]))
+    print("The resulting block:", bhex2hexstring(block_text))
+    print("In plain:", block_text)
 
+    # The following iv is for plaintext_block 1
+    iv_2 = b"u.\xd2\x9bi\x84\x14\xfcR^\xa0'\x00\x00\x00\x02"
+    print("Original IV:", bhex2hexstring(iv), "and during encryption IV_2:", bhex2hexstring(iv_2))
     
+    #The following big int is for MPC (as it stores input/output as int)
+    neg_int = -49647282631028740792246021233847733757
+    print( tohex(neg_int))

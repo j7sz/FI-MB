@@ -1,0 +1,5 @@
+{
+    "python.analysis.extraPaths": [
+        "./tls-test/tlslite-ng-0.8.0-alpha40"
+    ]
+}
