@@ -427,7 +427,7 @@ if __name__ == "__main__":
     iv = bytes.fromhex('c02e1eaafb0c6a4de9e3f35e')
     hex_PText = '474554202f7175657374696f6e732f32313135333236322f73656e64696e672d68746d6c2d7468726f7567682d707974686f6e2d736f636b65742d73657276657220485454502f312e310d0a486f73743a20737461636b6f766572666c6f772e636f6d0d0a0d0a'
     plaintext = bytes.fromhex(hex_PText) 
-    plaintext += bytes([23])
+    plaintext += bytes([23]) #[23] bytes indicate the msg for application
     print("Input text", hex_PText)
     associated_data = bytes.fromhex('17030300') + bytes([len(plaintext)+16])   # This is record header
     tag_length = 128
