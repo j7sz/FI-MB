@@ -1,0 +1,11 @@
+Reading lines.... 
+true match
+Final checking result:1
+The keying material for 1: -109418465768470348939181767434173174485
+Receiving directly 2.4e-05 MB in 2 rounds, taking 0.15697 seconds
+Sending by number 2.4e-05 MB in 3 rounds, taking 0.000137168 seconds
+Sending directly 0.208993 MB in 6 rounds, taking 0.000196394 seconds
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.336798 seconds 
+Data sent = 0.209017 MB in ~12 rounds (party 0 only; use '-v' for more details)
+Global data sent = 0.209041 MB (all parties)

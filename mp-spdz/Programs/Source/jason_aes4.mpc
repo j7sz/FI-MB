@@ -1,0 +1,62 @@
+from circuit import Circuit
+
+
+
+sb128 = sbits.get_type(128)
+
+
+n = int(1)
+
+#IV_c = []
+#IV_mb = []
+#for i in range(n):
+#    IV_c.append(sb128.get_input_from(0))
+#    IV_mb.append(sb128.get_input_from(1))
+
+IV_c = sb128.Array(n)
+IV_mb = sb128.Array(n)
+
+
+for i in range(n):
+    IV_c[i] = sb128.get_input_from(0)
+    IV_mb[i] = sb128.get_input_from(1)
+    print_ln("Reading lines.... ")
+
+
+
+
+def jason_eq_check(IV_c, IV_mb):
+    test_result = MemValue(1)
+    for i in range(n):
+        @if_e (IV_c[i].equal(IV_mb[i]).reveal())
+        def _():
+            print_ln("true match")
+        @else_
+        def _():
+            print_ln("false match")
+            test_result.write(0)
+    return test_result.reveal()
+
+a = jason_eq_check(IV_c, IV_mb)
+print_ln("Final checking result:%s", a)
+
+@if_e (a == 1)
+def _():
+    Key = sb128.get_input_from(0)
+    aes128 = Circuit('aes_128')
+    for i in range(n):
+        e = aes128(sbitvec([Key]), sbitvec([IV_mb[i]]))
+        result = e.elements()[0].reveal()
+        print_ln("The keying material for %s: %s", i+1, result)
+@else_
+def _():
+    print_ln('Detected MB input error')
+
+'''
+@if_e(IV_c[i].equal(IV_mb[i]).reveal() for i in range(n))
+def _():
+	print_ln("The ")
+@else_
+def _():
+	print_ln("Detected MB input error")
+'''

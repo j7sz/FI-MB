@@ -1,6 +1,9 @@
 from circuit import Circuit
 
+
 sb128 = sbits.get_type(128)
+
+
 n = 1
 
 IV_c = sb128.get_input_from(0)
@@ -14,7 +17,6 @@ def _():
 	e = aes128(sbitvec([Key] * n), sbitvec([IV_mb] * n))
 	result = e.elements()[n - 1].reveal()
 	print_ln("The keying material: %s", result)
-	#e.elements()[n - 1].reveal().print_reg()
 @else_
 def _():
 	print_ln("Detected MB input error")
@@ -24,7 +26,7 @@ def _():
 if(  IV_c.equal(IV_mb).reveal() ):
 	Key = sb128.get_input_from(0)
 	aes128 = Circuit('aes_128')
-	e = aes128(sbitvec([KeyS] * n), sbitvec([IV_mb] * n))
+	e = aes128(sbitvec([Key] * n), sbitvec([IV_mb] * n))
 	result = e.elements()[n - 1].reveal()
 	#print_ln("The keying material: %s", e.elements()[n - 1].reveal())
 	print_ln("The keying material: %s", result)

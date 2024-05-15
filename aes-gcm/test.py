@@ -4,7 +4,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
 from cryptography.hazmat.primitives.ciphers.modes import GCM
 
-
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import binascii
 
@@ -202,21 +202,19 @@ def jason_aes_gcm_encrypt(P, K, IV, A, t):
     return C, temp
 
 def jason_aes_gcm_extract(P, K, IV):
-    # Step 2
     len_IV = len(IV) * 8
-    if len_IV == 96: #Most likely we will do this...
+    if len_IV == 96: #We are running this...
         J_0 = IV + b'\x00\x00\x00\x01'
-    else:     # Step 1
+    else:    
         H = aes_encryption(b'\x00' * (128 // 8), K) # Compute H1 on input 0000000000 and K
         s = 128 * math.ceil(len_IV / 128) - len_IV
         O_s_64 = b'\x00' * ((s + 64) // 8)
         len_IV_64 = int.to_bytes(len_IV, 8, 'big')
         J_0 = GHASH(H, IV + O_s_64 + len_IV_64) 
 
-    # Step 3
-    temp = GCTR_extract(K, INC_32(J_0), P)
+    key_materials = GCTR_extract(K, INC_32(J_0), P)
 
-    return temp
+    return key_materials
 
 def aes_gcm_encrypt(P, K, IV, A, t):
 
@@ -275,6 +273,11 @@ def ori_aes_encryption(plaintext, key, iv, associated_data, tag_length):
     T = aes_gcm_encryptor.tag
 
     return C, T
+
+def Ori_AES_GCM_Enc(plaintext, associated_data, iv):
+    aesgcm = AESGCM(key)
+    ct = aesgcm.encrypt(iv, plaintext, associated_data)
+    return ct
 
 
 
@@ -397,9 +400,9 @@ if __name__ == "__main__":
 
     print("========")
     start_time = time.time()
-    for i in range(1):
+    for i in range(10):
         e = jason_aes_gcm_extract(plaintext, key, iv)
-    print("Time taken (1 times):", time.time() - start_time)
+    print("Time taken (10 times):", time.time() - start_time)
     print("The keying materials:", bhex2hexstring(e[0]))
     # print("Selecting blocks....", bhex2hexstring(c[0:16]))
     #test_c = bytes.fromhex('34e7c5df0af10cc9a6355ac3784850c1e6')
@@ -418,3 +421,22 @@ if __name__ == "__main__":
     #The following big int is for MPC (as it stores input/output as int)
     neg_int = -49647282631028740792246021233847733757
     print( tohex(neg_int))
+
+    print("==============Case 4==================")
+    key = bytes.fromhex('d8cbda2f884ae7e67a9dcad76c92e95a')
+    iv = bytes.fromhex('c02e1eaafb0c6a4de9e3f35e')
+    hex_PText = '474554202f7175657374696f6e732f32313135333236322f73656e64696e672d68746d6c2d7468726f7567682d707974686f6e2d736f636b65742d73657276657220485454502f312e310d0a486f73743a20737461636b6f766572666c6f772e636f6d0d0a0d0a'
+    plaintext = bytes.fromhex(hex_PText) 
+    plaintext += bytes([23])
+    print("Input text", hex_PText)
+    associated_data = bytes.fromhex('17030300') + bytes([len(plaintext)+16])   # This is record header
+    tag_length = 128
+    ciphertext, auth_tag = aes_gcm_encrypt(plaintext, key, iv, associated_data, tag_length)
+    print("Plaintext :", hex_PText)
+    print("Ciphertext:", bhex2hexstring(ciphertext))
+    print("Auth Tag", bhex2hexstring(auth_tag))
+
+    # 1da35cddef8addf1a86055c3d682b9bd62c169614b0e9f70de5ec7e5409ad33761656fbac6b1c68d972e75edaa27818614f08e088d78b2517efd4a4cbe4e3e68005658f068d8c04b3bfd88e82410b8809adeefadcdbde966ba8c18a9e38651a6d0bcfac2f2841aa2
+    # 97f03a168b41e36735bc440c41f12a40
+
+    

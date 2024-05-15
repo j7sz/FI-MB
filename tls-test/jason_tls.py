@@ -1,9 +1,11 @@
+#!/usr/bin/python3
+
 import sys
 sys.path.insert(0, "./tlslite-ng-0.8.0-alpha40")
 import os
 from socket import *
 import binascii
-from dnslib import DNSRecord,DNSQuestion
+#from dnslib import DNSRecord,DNSQuestion
 from tlslite import TLSConnection, HandshakeSettings
 from tlslite.constants import *
 import time
