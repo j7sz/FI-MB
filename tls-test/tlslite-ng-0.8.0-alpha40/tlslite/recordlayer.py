@@ -320,12 +320,18 @@ class RecordLayer(object):
         self.plaintextMessage = []
         self.ciphertextMessage = []
 
-        # Handshake-layer capture for certificate inspection
-        # Server HS key: _serverHandshakeState.encContext.key / .fixedNonce
-        # Record seqnum for Certificate message is typically 1 (0=EncryptedExtensions)
+        # Handshake-layer capture for certificate inspection.
+        # _serverHandshakeState: ConnectionState holding the server HS traffic key/IV.
+        # _hs_phase_complete: set True when calcTLS1_3PendingState is called a second
+        #   time (= application traffic secrets), so we stop capturing HS records.
+        # hsEncryptedRecords: raw ciphertext (no AEAD tag) for each encrypted HS record,
+        #   in wire order — this is what the MB observes.
+        # hsDecryptedRecords: plaintext for each handshake record after de-padding,
+        #   already has the inner content type byte stripped.
         self._serverHandshakeState = None
-        self.hsEncryptedRecords = []   # raw ciphertext seen on the wire
-        self.hsDecryptedRecords = []   # plaintext after AEAD decryption
+        self._hs_phase_complete = False
+        self.hsEncryptedRecords = []
+        self.hsDecryptedRecords = []
 
     @property
     def recv_record_limit(self):
@@ -940,11 +946,10 @@ class RecordLayer(object):
                 elif self._readState and \
                     self._readState.encContext and \
                     self._readState.encContext.isAEAD:
-                    if not self.handshake_finished:
-                        self.hsEncryptedRecords.append(bytes(data))
+                    if not self._hs_phase_complete:
+                        tag_len = self._readState.encContext.tagLength
+                        self.hsEncryptedRecords.append(bytes(data[:-tag_len]))
                     data = self._decryptAndUnseal(header, data)
-                    if not self.handshake_finished:
-                        self.hsDecryptedRecords.append(bytes(data))
                 elif self._readState and self._readState.encryptThenMAC:
                     data = self._macThenDecrypt(header.type, data)
                 elif self._readState and \
@@ -984,6 +989,9 @@ class RecordLayer(object):
                 if len(data) > self.recv_record_limit + 1:
                     raise TLSRecordOverflow()
                 data, contentType = self._tls13_de_pad(data)
+                if not self._hs_phase_complete and \
+                        contentType == ContentType.handshake:
+                    self.hsDecryptedRecords.append(bytes(data))
                 header = RecordHeader3().create((3, 4), contentType, len(data))
 
             # RFC 5246, section 6.2.1
@@ -1328,10 +1336,11 @@ class RecordLayer(object):
         if self.client:
             self._pendingWriteState = clientPendingState
             self._pendingReadState = serverPendingState
-            # Capture server handshake state on first invocation only;
-            # the second call overwrites with app traffic secrets.
+            # First call = handshake secrets; second call = application secrets.
             if self._serverHandshakeState is None:
                 self._serverHandshakeState = serverPendingState
+            else:
+                self._hs_phase_complete = True
         else:
             self._pendingWriteState = serverPendingState
             self._pendingReadState = clientPendingState

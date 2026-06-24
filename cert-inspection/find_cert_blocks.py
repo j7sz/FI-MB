@@ -48,7 +48,7 @@ def _parse_handshake_messages(plaintext: bytes) -> list:
     """
     messages = []
     i = 0
-    body = plaintext[:-1]  # strip inner content type byte
+    body = plaintext  # already de-padded by recordlayer._tls13_de_pad
     while i + 4 <= len(body):
         msg_type = body[i]
         msg_len  = int.from_bytes(body[i+1:i+4], 'big')

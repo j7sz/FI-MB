@@ -16,8 +16,10 @@ back as inputs to the MPC protocol so both parties' counter blocks can be
 cross-checked before the keystream is computed.
 """
 
+import os
 import sys
-sys.path.insert(0, "../tls-test/tlslite-ng-0.8.0-alpha40")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                '..', 'tls-test', 'tlslite-ng-0.8.0-alpha40'))
 
 from socket import socket, AF_INET, SOCK_STREAM
 from tlslite import TLSConnection, HandshakeSettings
