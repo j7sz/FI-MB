@@ -315,11 +315,17 @@ class RecordLayer(object):
         self._early_data_processed = 0
         self.send_record_limit = 2**14
 
-        # zombie : this is for the application message 
-        # to get app keys, use tlsconn._recordLayer._writeState.encContext.key
-        # and for iv, tlsconn._recordLayer._writeState.fixedNonce
+        # Application-layer message capture (outgoing)
+        # App key: _writeState.encContext.key / _writeState.fixedNonce
         self.plaintextMessage = []
         self.ciphertextMessage = []
+
+        # Handshake-layer capture for certificate inspection
+        # Server HS key: _serverHandshakeState.encContext.key / .fixedNonce
+        # Record seqnum for Certificate message is typically 1 (0=EncryptedExtensions)
+        self._serverHandshakeState = None
+        self.hsEncryptedRecords = []   # raw ciphertext seen on the wire
+        self.hsDecryptedRecords = []   # plaintext after AEAD decryption
 
     @property
     def recv_record_limit(self):
@@ -934,7 +940,11 @@ class RecordLayer(object):
                 elif self._readState and \
                     self._readState.encContext and \
                     self._readState.encContext.isAEAD:
+                    if not self.handshake_finished:
+                        self.hsEncryptedRecords.append(bytes(data))
                     data = self._decryptAndUnseal(header, data)
+                    if not self.handshake_finished:
+                        self.hsDecryptedRecords.append(bytes(data))
                 elif self._readState and self._readState.encryptThenMAC:
                     data = self._macThenDecrypt(header.type, data)
                 elif self._readState and \
@@ -1318,6 +1328,10 @@ class RecordLayer(object):
         if self.client:
             self._pendingWriteState = clientPendingState
             self._pendingReadState = serverPendingState
+            # Capture server handshake state on first invocation only;
+            # the second call overwrites with app traffic secrets.
+            if self._serverHandshakeState is None:
+                self._serverHandshakeState = serverPendingState
         else:
             self._pendingWriteState = serverPendingState
             self._pendingReadState = clientPendingState

@@ -1,0 +1,68 @@
+"""
+MPC program for TLS 1.3 certificate inspection (crypto discovery).
+
+Protocol:
+  P0 = Client (knows server handshake traffic key K and counter blocks)
+  P1 = Middlebox / Enterprise Gateway (observes encrypted traffic on wire)
+
+Inputs:
+  Public:  n  — number of AES-GCM blocks that cover the Certificate message
+  P0:      K  — server handshake traffic key (128 bits, AES-128-GCM)
+           CTR_0 .. CTR_{n-1}  — per-block counter values (IV XOR seqnum,
+                                  then AES-GCM internal counters INC_32^i(J0))
+  P1:      CTR_0 .. CTR_{n-1}  — same counter values observed on the wire
+
+The MPC verifies that both parties supplied identical counter blocks (binding
+the client's key to the ciphertext the MB actually observed), then computes
+AES(K, CTR_i) for each block and reveals the keystreams to P1.
+
+P1 XORs each keystream with the corresponding ciphertext block to recover
+the certificate plaintext for crypto inventory and discovery.
+"""
+
+from circuit import Circuit
+
+sb128 = sbits.get_type(128)
+
+n = public_input()
+print_ln("Certificate spans %s AES-GCM block(s)", n)
+
+CTR_c  = Array(n, sb128)
+CTR_mb = Array(n, sb128)
+
+@for_range(n)
+def _(i):
+    CTR_c[i]  = sb128.get_input_from(0)
+    CTR_mb[i] = sb128.get_input_from(1)
+
+
+def all_counters_match(CTR_c, CTR_mb, n):
+    """Return 1 if every counter block pair matches, else 0."""
+    ok = MemValue(1)
+    @for_range(n)
+    def _(i):
+        @if_e(CTR_c[i].equal(CTR_mb[i]).reveal())
+        def _():
+            print_ln("Block %s: counter verified", i)
+        @else_
+        def _():
+            print_ln("Block %s: counter MISMATCH — possible tampering", i)
+            ok.write(0)
+    return ok.reveal()
+
+
+match = all_counters_match(CTR_c, CTR_mb, n)
+print_ln("Counter verification result: %s", match)
+
+@if_e(match == 1)
+def _():
+    K = sb128.get_input_from(0)
+    aes128 = Circuit('aes_128')
+    @for_range(n)
+    def _(i):
+        keystream = aes128(sbitvec([K]), sbitvec([CTR_mb[i]]))
+        result = keystream.elements()[0].reveal()
+        print_ln("Keystream block %s: %s", i, result)
+@else_
+def _():
+    print_ln("Aborting: counter mismatch detected — cannot issue keystream")
