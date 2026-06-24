@@ -113,7 +113,7 @@ def state_from_bytes(data: bytes) -> [[int]]:
 
 
 def bytes_from_state(state: [[int]]) -> bytes:
-    return bytes(state[0] + state[1] + state[2] + state[3])
+    return bytes(b for row in state for b in row)
 
 
 def aes_encryption(data: bytes, key: bytes) -> bytes:
@@ -216,26 +216,9 @@ def inv_mix_columns(state: [[int]]) -> [[int]]:
         inv_mix_column(r)
 
 
-def inv_mix_column_optimized(col: [int]):
-    u = xtime(xtime(col[0] ^ col[2]))
-    v = xtime(xtime(col[1] ^ col[3]))
-    col[0] ^= u
-    col[1] ^= v
-    col[2] ^= u
-    col[3] ^= v
-
-
-def inv_mix_columns_optimized(state: [[int]]) -> [[int]]:
-    for r in state:
-        inv_mix_column_optimized(r)
-    mix_columns(state)
-
-
 def aes_decryption(cipher: bytes, key: bytes) -> bytes:
 
-    key_byte_length = len(key)
-    key_bit_length = key_byte_length * 8
-    nk = key_byte_length // 4
+    key_bit_length = len(key) * 8
 
     if key_bit_length == 128:
         nr = 10
