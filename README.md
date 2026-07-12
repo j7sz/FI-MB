@@ -93,6 +93,13 @@ The AES implementation (`aes-gcm/implementing_aes.py`) is pure Python — no C e
 
 Follow the [MP-SPDZ build instructions](https://github.com/data61/MP-SPDZ) inside `mp-spdz/`. The certificate inspection program uses the semi-honest protocol (`semi-party.x`).
 
+The AES-128 Bristol Fashion circuit used by `cert_inspect.mpc` is not checked into this repo (it's fetched on demand, same as upstream MP-SPDZ's `make Programs/Circuits`). Fetch it once:
+
+```bash
+cd mp-spdz
+git clone --depth 1 https://github.com/mkskeller/bristol-fashion Programs/Circuits
+```
+
 ---
 
 ## Certificate Inspection: Step-by-Step
@@ -122,6 +129,63 @@ OK
 ```
 
 The end-to-end test (`TestEndToEndBlockDecryption`) builds a synthetic TLS handshake record, AES-GCM encrypts it, discovers the certificate blocks, derives counter blocks, decrypts only those blocks, and verifies the plaintext matches exactly.
+
+---
+
+### Step 1b — Toy demo with the *real* MPC protocol (no live server needed)
+
+`test_cert_inspection.py` simulates the keystream computation directly in Python. `toy_demo.py` goes one step further: it runs the **actual MP-SPDZ MPC protocol** (`semi-party.x`, both parties, over localhost) against a synthetic certificate, so you can see the real thing work end to end.
+
+```bash
+cd /path/to/FI-MB/cert-inspection
+python3 toy_demo.py
+```
+
+What it does:
+
+1. Builds a synthetic TLS 1.3 handshake record containing a fake Certificate message
+2. AES-encrypts it exactly as a real TLS 1.3 server would (AES-128 counter mode)
+3. Finds the AES-GCM block indices spanning the Certificate message
+4. Derives the counter blocks and writes real MP-SPDZ input files
+5. Compiles `cert_inspect.mpc` for the actual block count and runs both MPC parties
+6. Parses the revealed keystream from MPC output, decrypts the cert blocks, and confirms the recovered bytes match the original exactly
+7. Runs a second scenario where the MB's counter blocks are tampered (wrong sequence number) and confirms the MPC aborts **without leaking any keystream**
+
+Expected output (abridged):
+
+```
+======================================================================
+SCENARIO 1: Honest MB — counters match, certificate is revealed
+======================================================================
+
+Certificate found at AES-GCM block indices: [0, 1, 2, 3, 4, 5]
+Number of blocks to reveal via MPC: 6
+  Compiling cert_inspect for n=6 blocks ...
+  Running MPC (both parties, localhost) ...
+
+MPC revealed 6 keystream block(s) to the MB.
+MB decrypted 91 bytes.
+Recovered bytes match original plaintext: True
+Parsed 1 certificate(s) from MPC-revealed plaintext.
+Leaf cert DER matches original: True
+
+======================================================================
+SCENARIO 2: Tampered MB — counters DON'T match, MPC aborts
+======================================================================
+
+MPC detected counter mismatch and aborted: True
+Any keystream leaked despite mismatch: False
+
+======================================================================
+RESULT
+======================================================================
+Scenario 1 (honest MB, cert revealed):      PASS
+Scenario 2 (tampered MB, MPC aborts):        PASS
+```
+
+This is the strongest evidence the technique works: real garbled-AES computation inside MP-SPDZ, real counter-verification logic, and a proof that a mismatched/tampered MB gets nothing.
+
+> Note: `cert_inspect.mpc`'s block count `n` must be known at **compile time** (MP-SPDZ's `sbits`-backed arrays can't be sized from a runtime `public_input()`), so `toy_demo.py` calls `compile.py cert_inspect <n>` with the actual discovered block count before each MPC run. In production, the client and MB should agree on `n` out of band (e.g. from the TLS record length) before compiling.
 
 ---
 

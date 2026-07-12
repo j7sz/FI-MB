@@ -1,0 +1,11 @@
+Using statistical security parameter 40
+Certificate spans 3 AES-GCM block(s)
+Block 0: counter MISMATCH — possible tampering
+Block 1: counter MISMATCH — possible tampering
+Block 2: counter MISMATCH — possible tampering
+Counter verification result: 0
+Aborting: counter mismatch detected — cannot issue keystream
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.0473349 seconds 
+Data sent = 0.048981 MB in ~812 rounds (party 0 only; use '-v' for more details)
+Global data sent = 0.097962 MB (all parties)

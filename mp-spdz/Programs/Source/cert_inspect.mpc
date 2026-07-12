@@ -6,7 +6,10 @@ Protocol:
   P1 = Middlebox / Enterprise Gateway (observes encrypted traffic on wire)
 
 Inputs:
-  Public:  n  — number of AES-GCM blocks that cover the Certificate message
+  Compile-time: n — number of AES-GCM blocks that cover the Certificate
+                    message (pass as `compile.py cert_inspect <n>`; sbits
+                    arrays must be sized before compilation, so this cannot
+                    be a runtime public_input()). Defaults to 4 if omitted.
   P0:      K  — server handshake traffic key (128 bits, AES-128-GCM)
            CTR_0 .. CTR_{n-1}  — per-block counter values (IV XOR seqnum,
                                   then AES-GCM internal counters INC_32^i(J0))
@@ -24,7 +27,7 @@ from circuit import Circuit
 
 sb128 = sbits.get_type(128)
 
-n = public_input()
+n = int(program.args[1]) if len(program.args) > 1 else 4
 print_ln("Certificate spans %s AES-GCM block(s)", n)
 
 CTR_c  = Array(n, sb128)
