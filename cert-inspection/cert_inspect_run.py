@@ -6,15 +6,24 @@ Flow:
   2. tlslite-ng captures the server handshake traffic key, the encrypted
      handshake records, and the decrypted handshake record payloads.
   3. The client locates the Certificate message inside the decrypted records
-     and identifies which AES-GCM block indices span it.
-  4. For each certificate block, the client computes the AES-GCM counter
-     value (CTR_i) that was used to generate its keystream.
-  5. The client writes its MPC inputs (counter blocks + server HS key) to
-     Player-Data/Input-P0-0 and the block count to Programs/Public-Input/cert_inspect.
-  6. The MB writes its MPC inputs (counter blocks from wire) to
-     Player-Data/Input-P1-0.
-  7. Both parties run:  Scripts/semi.sh cert_inspect
-     The MPC reveals the AES keystream for each cert block to the MB.
+     and identifies which AES-GCM block indices span it, plus the block
+     containing its 4-byte handshake header (msg_type || length).
+  4. For each block, the client computes the AES-GCM counter value (CTR_i).
+  5. The client writes its MPC inputs (header counter, key, body counters)
+     to Player-Data/Input-P0-0.
+  6. The MB writes its MPC inputs (header counter, body counters observed
+     from wire) to Player-Data/Input-P1-0.
+  7. Both parties compile and run:
+       compile.py cert_inspect <n> <ct_hdr>
+       Scripts/semi.sh cert_inspect-<n>-<ct_hdr>
+     The MPC first verifies, INSIDE the circuit, that the header decrypts
+     to msg_type == 0x0B (Certificate) — without revealing the header
+     plaintext — before revealing any keystream. This prevents a
+     malicious/compromised client from mislabeling a non-certificate block
+     (e.g. live application data) as "the certificate" to get the MB to
+     decrypt it; TLS 1.3 hides the outer record content type, so the MB
+     cannot otherwise tell handshake records from application data records
+     apart from ciphertext alone.
   8. The MB XORs each keystream with the ciphertext block and parses the
      resulting X.509 DER certificate for crypto inventory.
 
@@ -81,43 +90,57 @@ def write_mpc_inputs(server_hs_key: bytes, server_hs_iv: bytes,
                      cert_record_idx: int, cert_block_indices: list,
                      enc_record: bytes):
     """
-    Write MPC input files and public input for cert_inspect.mpc.
+    Write MPC input files for cert_inspect.mpc, and return (n, ct_hdr) so
+    the caller can compile the circuit with:
+        compile.py cert_inspect <n> <ct_hdr>
 
-    Client (P0) supplies: counter blocks CTR_i (then key K last).
-    MB     (P1) supplies: the same counter blocks observed from wire.
-    Public:    n (number of cert blocks).
+    Client (P0) supplies (in this order): header counter, key, body counters.
+    MB     (P1) supplies (in this order): header counter, body counters.
+
+    NOTE: this reference implementation assumes the Certificate message
+    header (msg_type + 3-byte length) is 16-byte-block-aligned, i.e. the
+    Certificate message starts exactly on an AES-GCM block boundary. This
+    holds for the synthetic records used in the demo/tests; handling an
+    unaligned header (split across two blocks) is a straightforward but
+    more involved extension left as future work.
     """
     n_record_blocks = math.ceil(len(enc_record) / 16)
-    # Offset from start of record to the cert-specific blocks
     all_ctrs = build_counter_blocks(server_hs_iv, cert_record_idx,
                                     n_record_blocks)
 
     cert_ctrs = [all_ctrs[i] for i in cert_block_indices]
     n = len(cert_ctrs)
 
+    header_block_idx = cert_block_indices[0]
+    if (header_block_idx * 16) % 16 != 0:
+        raise NotImplementedError(
+            "Certificate header is not block-aligned; unsupported by this "
+            "reference implementation.")
+    ctr_hdr = all_ctrs[header_block_idx]
+    ct_hdr  = enc_record[header_block_idx*16:(header_block_idx+1)*16]
+
     player_data = os.path.join(MP_SPDZ_DIR, 'Player-Data')
-    pub_input   = os.path.join(MP_SPDZ_DIR, 'Programs', 'Public-Input', 'cert_inspect')
 
-    # Public input: number of cert blocks
-    with open(pub_input, 'w') as f:
-        f.write(f"{n}\n")
-
-    # P0 (client): counter blocks as big integers, then key
+    # P0 (client): header counter, key, then body counters
     with open(os.path.join(player_data, 'Input-P0-0'), 'w') as f:
-        for ctr in cert_ctrs:
-            f.write(f"{int.from_bytes(ctr, 'big')}\n")
+        f.write(f"{int.from_bytes(ctr_hdr, 'big')}\n")
         f.write(f"{int.from_bytes(server_hs_key, 'big')}\n")
-
-    # P1 (MB): counter blocks derived from the encrypted record it observed
-    # In practice the MB computes these from the wire-observed record IV + seqnum.
-    # Here we write the same values (simulating an honest MB).
-    with open(os.path.join(player_data, 'Input-P1-0'), 'w') as f:
         for ctr in cert_ctrs:
             f.write(f"{int.from_bytes(ctr, 'big')}\n")
 
+    # P1 (MB): header counter, then body counters, derived from the
+    # encrypted record it observed on the wire (simulating an honest MB).
+    with open(os.path.join(player_data, 'Input-P1-0'), 'w') as f:
+        f.write(f"{int.from_bytes(ctr_hdr, 'big')}\n")
+        for ctr in cert_ctrs:
+            f.write(f"{int.from_bytes(ctr, 'big')}\n")
+
+    ct_hdr_int = int.from_bytes(ct_hdr, 'big')
     print(f"MPC inputs written — {n} certificate block(s).")
-    print(f"Run: cd {MP_SPDZ_DIR} && Scripts/semi.sh cert_inspect")
-    return cert_ctrs
+    print(f"Run: cd {MP_SPDZ_DIR} && "
+         f"python3 compile.py cert_inspect {n} {ct_hdr_int} && "
+         f"Scripts/semi.sh cert_inspect-{n}-{ct_hdr_int}")
+    return cert_ctrs, n, ct_hdr_int
 
 
 def mb_decrypt_cert_blocks(enc_record: bytes, keystreams: list,
@@ -177,7 +200,7 @@ if __name__ == '__main__':
 
     # Write MPC inputs so both parties can run cert_inspect.mpc
     print("\n=== Writing MPC inputs ===")
-    cert_ctrs = write_mpc_inputs(
+    cert_ctrs, n, ct_hdr_int = write_mpc_inputs(
         conn.server_hs_key, conn.server_hs_iv,
         cert_record_idx, cert_block_idxs, enc_record,
     )

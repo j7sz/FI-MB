@@ -10,21 +10,30 @@ FI-MB lets an enterprise middlebox (MB) inspect specific fields inside an encryp
 Client (P0)                         Middlebox (P1)
 ──────────────────                  ──────────────────
 Has: TLS session key K              Has: encrypted wire traffic
-     Counter blocks CTR_i                Counter blocks CTR_i
+     Header + body CTR blocks           Header + body CTR blocks
                                          (observed from wire)
-          ╔══════════════════════╗
-          ║   MP-SPDZ MPC        ║
-          ║  1. Verify CTR match ║
-          ║  2. Compute AES(K,   ║
-          ║     CTR_i) in-circuit║
-          ║  3. Reveal keystream ║
-          ║     to MB only       ║
-          ╚══════════════════════╝
+          ╔══════════════════════════════╗
+          ║   MP-SPDZ MPC                ║
+          ║  1. Verify header CTR match  ║
+          ║  2. Decrypt header IN-CIRCUIT║
+          ║     and check msg_type==0x0B ║
+          ║     (Certificate) -- nothing ║
+          ║     about the header itself  ║
+          ║     is revealed               ║
+          ║  3. Verify body CTR match     ║
+          ║  4. Compute AES(K, CTR_i)     ║
+          ║     in-circuit for body only  ║
+          ║  5. Reveal body keystream      ║
+          ║     to MB only, and only if   ║
+          ║     both checks passed        ║
+          ╚══════════════════════════════╝
                     │
                     ▼
             MB XORs keystream ⊕ ciphertext
             → reads only the approved field
 ```
+
+Step 2 exists because TLS 1.3 hides the outer record content type — every encrypted record looks like `application_data` on the wire. Without it, a malicious or compromised client could label *any* ciphertext block "the certificate" (including live application data) and the MB would decrypt it, never knowing. See [Security: Proving Revealed Blocks Are Actually the Certificate](#security-proving-revealed-blocks-are-actually-the-certificate) below.
 
 ---
 
@@ -52,6 +61,30 @@ FI-MB solves this: the client (who holds the handshake key) cooperates with the 
 
 ---
 
+## Security: Proving Revealed Blocks Are Actually the Certificate
+
+**The problem.** Revealing a keystream for "the certificate blocks" is only safe if those blocks really are the Certificate message. But the client is the only party who can see the plaintext, so what stops it (if malicious or compromised) from mislabeling a different block — say, live application data — as "the certificate" and getting the MB to decrypt it? Counter-block matching alone doesn't catch this: it only proves both parties agree on *which ciphertext bytes* are being discussed, not on *what those bytes mean*. And TLS 1.3 makes this worse by design — the outer record content type is hidden, so the MB cannot independently tell a handshake record from an application-data record just by looking at ciphertext.
+
+**The defense.** `cert_inspect.mpc` decrypts the 4-byte handshake message header (`msg_type || 3-byte length`) that precedes the claimed certificate body **inside the MPC circuit**, and checks that `msg_type == 0x0B` (Certificate) before revealing anything else. Only that single verification bit comes out — never the header plaintext. If the check fails, no keystream is computed or released for the body blocks at all.
+
+```
+1. Header counter match   -- P0 and P1 must agree on which ciphertext bytes are the header
+2. Header type check      -- AES(K, CTR_hdr) XOR CT_hdr, check top byte == 0x0B, in-circuit
+3. Body counter match     -- as before, for the certificate body blocks
+4. Keystream reveal       -- only if 1-3 all pass
+```
+
+This turns "trust the client's claim" into an MPC-enforced predicate. `cert-inspection/toy_demo.py` includes a scenario that demonstrates this directly: a simulated malicious client relabels the (genuine, correctly-countered) `EncryptedExtensions` block as "the certificate." The counters match — it's a real position on the wire — but the header-type check fails and the MPC reveals nothing.
+
+**What this does not (yet) cover**, as layered defense-in-depth for a production deployment:
+- **Session binding** — bind each MPC run to a session identifier (e.g. a hash of `ClientHello.random || ServerHello.random`) and allow only one certificate reveal per handshake, so a malicious client can't make repeated attempts against the same session hoping one slips through.
+- **Post-hoc structural validation** — after a reveal, the MB should still DER-parse the recovered bytes and verify the chain builds to a trusted root; this is a useful backstop and forensic signal, but by itself does *not* prevent a leak (the bytes are already decrypted by the time this runs) — it only detects one after the fact.
+- **Least privilege on the MB side** — log and rate-limit `cert_inspect` invocations per client identity, since a hardened circuit doesn't eliminate the value of limiting blast radius.
+
+**Known limitation of the current implementation:** the header-type check assumes the Certificate message starts exactly on a 16-byte AES-GCM block boundary. Handling an unaligned header (split across two blocks) is a straightforward but more involved bit-shift extension, left as future work — see the docstring in `cert_inspect_run.py:write_mpc_inputs`.
+
+---
+
 ## Repository Layout
 
 ```
@@ -62,7 +95,8 @@ FI-MB/
 ├── cert-inspection/
 │   ├── tls_hs_extract.py       # Patched TLSConnection that captures HS state
 │   ├── find_cert_blocks.py     # Locate Certificate message in decrypted record
-│   ├── cert_inspect_run.py     # End-to-end orchestration script
+│   ├── cert_inspect_run.py     # End-to-end orchestration script (live server)
+│   ├── toy_demo.py             # Runs the real MPC protocol against synthetic data
 │   └── test_cert_inspection.py # 21 offline unit tests
 ├── mp-spdz/
 │   └── Programs/Source/
@@ -143,49 +177,61 @@ python3 toy_demo.py
 
 What it does:
 
-1. Builds a synthetic TLS 1.3 handshake record containing a fake Certificate message
+1. Builds a synthetic TLS 1.3 handshake record: `EncryptedExtensions` (block 0) followed by a Certificate message starting exactly at block 1
 2. AES-encrypts it exactly as a real TLS 1.3 server would (AES-128 counter mode)
-3. Finds the AES-GCM block indices spanning the Certificate message
-4. Derives the counter blocks and writes real MP-SPDZ input files
-5. Compiles `cert_inspect.mpc` for the actual block count and runs both MPC parties
+3. Finds the AES-GCM block indices spanning the Certificate message, and the block containing its 4-byte handshake header
+4. Derives the counter blocks and writes real MP-SPDZ input files (header counter + body counters)
+5. Compiles `cert_inspect.mpc` for the actual block count and header ciphertext, and runs both MPC parties
 6. Parses the revealed keystream from MPC output, decrypts the cert blocks, and confirms the recovered bytes match the original exactly
-7. Runs a second scenario where the MB's counter blocks are tampered (wrong sequence number) and confirms the MPC aborts **without leaking any keystream**
+7. Runs a second scenario where the MB's body counter blocks are tampered (wrong sequence number) and confirms the MPC aborts **without leaking any keystream**
+8. Runs a third scenario where a simulated malicious client relabels the (correctly-countered) `EncryptedExtensions` block as "the certificate" and confirms the in-circuit header-type check catches it — see [Security](#security-proving-revealed-blocks-are-actually-the-certificate) above
 
 Expected output (abridged):
 
 ```
 ======================================================================
-SCENARIO 1: Honest MB — counters match, certificate is revealed
+SCENARIO 1: Honest MB — certificate is revealed
 ======================================================================
 
-Certificate found at AES-GCM block indices: [0, 1, 2, 3, 4, 5]
-Number of blocks to reveal via MPC: 6
-  Compiling cert_inspect for n=6 blocks ...
+Certificate found at AES-GCM block indices: [1, 2, 3, 4, 5]
+Header block: 1  Body blocks to reveal via MPC: 5
+  Compiling cert_inspect for n=5 block(s), header ciphertext bound in ...
   Running MPC (both parties, localhost) ...
 
-MPC revealed 6 keystream block(s) to the MB.
-MB decrypted 91 bytes.
+MPC verified the header is a Certificate message (0x0B) and
+revealed 5 keystream block(s) to the MB.
 Recovered bytes match original plaintext: True
 Parsed 1 certificate(s) from MPC-revealed plaintext.
 Leaf cert DER matches original: True
 
 ======================================================================
-SCENARIO 2: Tampered MB — counters DON'T match, MPC aborts
+SCENARIO 2: Tampered MB — body counters DON'T match, MPC aborts
 ======================================================================
 
-MPC detected counter mismatch and aborted: True
+Header check passed (both parties agree on the header block).
+MPC detected body counter mismatch and aborted: True
 Any keystream leaked despite mismatch: False
+
+======================================================================
+SCENARIO 3: Malicious client relabels a non-certificate block
+======================================================================
+
+Attacker claims block 0 (actually EncryptedExtensions, type 0x08) is the Certificate message.
+Counters legitimately match on both sides (real wire position).
+MPC header-type check rejected the mislabeled block: True
+Any keystream leaked despite counters matching: False
 
 ======================================================================
 RESULT
 ======================================================================
-Scenario 1 (honest MB, cert revealed):      PASS
-Scenario 2 (tampered MB, MPC aborts):        PASS
+Scenario 1 (honest MB, cert revealed):              PASS
+Scenario 2 (tampered MB, MPC aborts):                PASS
+Scenario 3 (relabeling attack, MPC aborts):          PASS
 ```
 
-This is the strongest evidence the technique works: real garbled-AES computation inside MP-SPDZ, real counter-verification logic, and a proof that a mismatched/tampered MB gets nothing.
+This is the strongest evidence the technique works: real garbled-AES computation inside MP-SPDZ, real counter-verification logic, and proof both that a tampered MB gets nothing *and* that a malicious client can't talk its way past the header check.
 
-> Note: `cert_inspect.mpc`'s block count `n` must be known at **compile time** (MP-SPDZ's `sbits`-backed arrays can't be sized from a runtime `public_input()`), so `toy_demo.py` calls `compile.py cert_inspect <n>` with the actual discovered block count before each MPC run. In production, the client and MB should agree on `n` out of band (e.g. from the TLS record length) before compiling.
+> Note: `cert_inspect.mpc`'s block count `n` and header ciphertext must be known at **compile time** (MP-SPDZ's `sbits`-backed arrays can't be sized from a runtime `public_input()`, and the header ciphertext is baked in as a circuit constant since it's public wire data anyway), so `toy_demo.py` calls `compile.py cert_inspect <n> <ct_hdr>` before each MPC run. In production, the client and MB should agree on `n` and exchange the header ciphertext out of band before compiling.
 
 ---
 
@@ -208,15 +254,16 @@ The script:
 1. Connects via TLS 1.3 / AES-128-GCM
 2. Captures the server handshake traffic key and IV
 3. Records every encrypted handshake record (what the MB sees on the wire)
-4. Decrypts each record and locates the `Certificate` message
+4. Decrypts each record and locates the `Certificate` message and its header block
 5. Prints the full certificate chain (client has the key, so it can parse directly)
 6. Writes MPC input files:
 
-| File | Written by | Contents |
+| File | Written by | Contents (in order) |
 |---|---|---|
-| `mp-spdz/Player-Data/Input-P0-0` | Client (P0) | Counter blocks CTR_i, then key K |
-| `mp-spdz/Player-Data/Input-P1-0` | MB (P1) | Counter blocks CTR_i from wire |
-| `mp-spdz/Programs/Public-Input/cert_inspect` | Client (P0) | Number of cert blocks n |
+| `mp-spdz/Player-Data/Input-P0-0` | Client (P0) | Header counter, key K, body counter blocks CTR_i |
+| `mp-spdz/Player-Data/Input-P1-0` | MB (P1) | Header counter, body counter blocks CTR_i from wire |
+
+`n` (body block count) and the header ciphertext are printed as **compile-time** arguments for `compile.py` (see Step 3) rather than written to a public-input file, since `sbits` arrays and the header-check constant must be sized/bound at compile time.
 
 Sample output:
 
@@ -244,48 +291,57 @@ Certificate chain: 2 certificate(s)
     ...
 
 MPC inputs written — 79 certificate block(s).
-Run: cd mp-spdz && Scripts/semi.sh cert_inspect
+Run: cd mp-spdz && python3 compile.py cert_inspect 79 <ct_hdr_int> && Scripts/semi.sh cert_inspect-79-<ct_hdr_int>
 ```
 
 ---
 
 ### Step 3 — Run the MPC protocol
 
-Compile the program once:
+Compile the program with the actual body block count `n` and header ciphertext `ct_hdr` (both printed by `cert_inspect_run.py` in Step 2 — both parties must use the same values, since the header ciphertext is public wire data and `n` is agreed out of band):
 
 ```bash
 cd /path/to/FI-MB/mp-spdz
-./compile.py cert_inspect
+python3 compile.py cert_inspect <n> <ct_hdr>
 ```
 
-Then both parties run their side. On a single machine (simulation):
+Then both parties run their side against the resulting `cert_inspect-<n>-<ct_hdr>` program. On a single machine (simulation):
 
 ```bash
 # Terminal 1 — Client (P0)
-./semi-party.x -I 0 cert_inspect
+./semi-party.x -I 0 cert_inspect-<n>-<ct_hdr>
 
 # Terminal 2 — MB (P1)
-./semi-party.x -I 1 cert_inspect
+./semi-party.x -I 1 cert_inspect-<n>-<ct_hdr>
 ```
 
-On two separate machines, each party runs their command; MP-SPDZ handles the network connection between them.
+Or use the convenience script that launches both parties locally:
+
+```bash
+Scripts/semi.sh cert_inspect-<n>-<ct_hdr>
+```
+
+On two separate machines, each party runs their own command; MP-SPDZ handles the network connection between them.
 
 The MPC program (`Programs/Source/cert_inspect.mpc`) does the following inside the circuit:
 
-1. **Counter verification** — checks that P0 and P1 supplied identical CTR blocks, binding the client's key to the exact ciphertext the MB observed on the wire. If any block mismatches, the protocol aborts.
-2. **Keystream computation** — computes `AES(K, CTR_i)` for each certificate block using a garbled AES circuit. K never leaves the circuit.
-3. **Keystream reveal** — outputs `keystream_i` to P1 (the MB) for each block.
+1. **Header counter verification** — checks P0 and P1 agree on which ciphertext block is the handshake header. Mismatch aborts immediately.
+2. **Header type check** — decrypts the header in-circuit and checks `msg_type == 0x0B` (Certificate) without revealing anything else about it. Failure aborts — this is what stops a malicious client from relabeling a non-certificate block (see [Security](#security-proving-revealed-blocks-are-actually-the-certificate)).
+3. **Body counter verification** — checks that P0 and P1 supplied identical CTR blocks for the certificate body, binding the client's key to the exact ciphertext the MB observed on the wire. Mismatch aborts.
+4. **Keystream computation** — computes `AES(K, CTR_i)` for each certificate body block using a garbled AES circuit. K never leaves the circuit.
+5. **Keystream reveal** — outputs `keystream_i` to P1 (the MB) for each body block, only if steps 1-3 all passed.
 
 Sample MPC output (P1 terminal):
 
 ```
-Certificate spans 79 AES-GCM block(s)
+Certificate claimed to span 79 AES-GCM block(s)
+Header verified: handshake message type is Certificate (0x0B)
 Block 0: counter verified
 Block 1: counter verified
 ...
 Counter verification result: 1
-Keystream block 0: 0x3f8a...
-Keystream block 1: 0xc201...
+Keystream block 0: 84237...
+Keystream block 1: 15602...
 ...
 ```
 
@@ -324,8 +380,9 @@ for i, der in enumerate(certs):
 | Subject, issuer, key algorithm, key size | Any application data |
 | Certificate validity dates | Content outside the cert blocks |
 | Whether the cert passes crypto policy | Client's private key |
+| — | Anything, if the client mislabels a non-certificate block (blocked by the header-type check) |
 
-The MPC counter verification also prevents replay: the MB cannot substitute a different ciphertext and have the client unknowingly compute keystreams for it. The counter blocks are derived from the record's sequence number and nonce, which both parties observe and must agree on inside the circuit.
+The MPC counter verification prevents replay: the MB cannot substitute a different ciphertext and have the client unknowingly compute keystreams for it. The counter blocks are derived from the record's sequence number and nonce, which both parties observe and must agree on inside the circuit. The header-type check (see [Security](#security-proving-revealed-blocks-are-actually-the-certificate)) prevents a stronger attack the counter check alone doesn't catch: a malicious client correctly pointing at real wire bytes, but *lying about what those bytes are*.
 
 ---
 
@@ -361,4 +418,5 @@ Finds the 16-byte AES-GCM block(s) containing `HTTP/1.1\r\n` for use with `jason
 
 1. Write a block-finder in Python (see `split_blocks.py` or `find_cert_blocks.py` as templates)
 2. Write an MPC program in `mp-spdz/Programs/Source/` that takes the relevant counter blocks, verifies them, and reveals the keystream for only those blocks
-3. The client writes inputs; both parties run `semi-party.x`
+3. **If the target field's identity can't be inferred from ciphertext alone** (as with TLS 1.3's hidden content types), add an in-circuit structural check — decrypt a small preceding marker under MPC and assert its value — before revealing anything, following the pattern in `cert_inspect.mpc`. Skipping this step means trusting the client's unverified claim about what the revealed bytes are.
+4. The client writes inputs; both parties run `semi-party.x`

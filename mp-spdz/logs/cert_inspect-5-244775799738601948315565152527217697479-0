@@ -1,0 +1,14 @@
+Using statistical security parameter 40
+Certificate claimed to span 5 AES-GCM block(s)
+Header verified: handshake message type is Certificate (0x0B)
+Block 0: counter MISMATCH — possible tampering
+Block 1: counter MISMATCH — possible tampering
+Block 2: counter MISMATCH — possible tampering
+Block 3: counter MISMATCH — possible tampering
+Block 4: counter MISMATCH — possible tampering
+Counter verification result: 0
+Aborting: counter mismatch detected — cannot issue keystream
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.146551 seconds 
+Data sent = 0.184546 MB in ~2039 rounds (party 0 only; use '-v' for more details)
+Global data sent = 0.369092 MB (all parties)

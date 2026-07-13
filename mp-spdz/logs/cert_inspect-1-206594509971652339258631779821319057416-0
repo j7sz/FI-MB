@@ -1,0 +1,7 @@
+Using statistical security parameter 40
+Certificate claimed to span 1 AES-GCM block(s)
+Aborting: claimed block(s) are not a Certificate message (handshake header check failed) — cannot issue keystream
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.180205 seconds 
+Data sent = 0.164744 MB in ~743 rounds (party 0 only; use '-v' for more details)
+Global data sent = 0.329488 MB (all parties)

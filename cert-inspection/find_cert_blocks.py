@@ -57,6 +57,18 @@ def _parse_handshake_messages(plaintext: bytes) -> list:
     return messages
 
 
+def find_cert_message_offset(hs_plaintext: bytes) -> int:
+    """
+    Return the byte offset (within the decrypted record) of the Certificate
+    handshake message's 4-byte header, or None if not found.
+    """
+    messages = _parse_handshake_messages(hs_plaintext)
+    for msg_type, offset, _ in messages:
+        if msg_type == CERT_MSG_TYPE:
+            return offset
+    return None
+
+
 def find_cert_block_indices(hs_plaintext: bytes, block_size: int = 16) -> list:
     """
     Return the AES-GCM block indices (0-based within the encrypted record)

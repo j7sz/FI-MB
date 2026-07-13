@@ -5,38 +5,67 @@ Protocol:
   P0 = Client (knows server handshake traffic key K and counter blocks)
   P1 = Middlebox / Enterprise Gateway (observes encrypted traffic on wire)
 
+Threat this defends against:
+  TLS 1.3 hides the outer record content type (every encrypted record looks
+  like application_data on the wire), so P1 cannot tell from ciphertext
+  alone whether a given byte range is really the Certificate handshake
+  message or, say, live application data. Without an additional check, a
+  malicious/compromised client could label ANY block range "the
+  certificate" and this program would happily reveal its keystream to P1 —
+  leaking data P1 was never supposed to see.
+
+  The fix: before revealing any body keystream, the circuit itself decrypts
+  the 4-byte handshake message header (type + 3-byte length) that precedes
+  the claimed body and checks, INSIDE the circuit, that the type byte is
+  0x0B (Certificate). Only the single verification bit is revealed — never
+  the header plaintext. If the check fails, no keystream is ever computed
+  or released for the body blocks.
+
 Inputs:
-  Compile-time: n — number of AES-GCM blocks that cover the Certificate
-                    message (pass as `compile.py cert_inspect <n>`; sbits
-                    arrays must be sized before compilation, so this cannot
-                    be a runtime public_input()). Defaults to 4 if omitted.
-  P0:      K  — server handshake traffic key (128 bits, AES-128-GCM)
-           CTR_0 .. CTR_{n-1}  — per-block counter values (IV XOR seqnum,
-                                  then AES-GCM internal counters INC_32^i(J0))
-  P1:      CTR_0 .. CTR_{n-1}  — same counter values observed on the wire
+  Compile-time: n       — number of AES-GCM body blocks that cover the
+                           Certificate message.
+                CT_HDR  — ciphertext (as a 128-bit integer) of the AES-GCM
+                           block that contains the 4-byte handshake header
+                           (msg_type || 3-byte length) immediately
+                           preceding the Certificate body. This is public
+                           wire data P1 already has, so it is safe to bake
+                           in at compile time.
+                Pass as `compile.py cert_inspect <n> <CT_HDR>`.
+                Both default to placeholder values if omitted (compile-only
+                smoke test; a real run must always supply both).
 
-The MPC verifies that both parties supplied identical counter blocks (binding
-the client's key to the ciphertext the MB actually observed), then computes
-AES(K, CTR_i) for each block and reveals the keystreams to P1.
+  P0: CTR_hdr        — counter block for the header's AES-GCM block
+      CTR_0..CTR_n-1 — per-block counter values for the certificate body
+      K              — server handshake traffic key (128 bits, AES-128-GCM)
+  P1: CTR_hdr, CTR_0..CTR_n-1 — same counter values observed on the wire
 
-P1 XORs each keystream with the corresponding ciphertext block to recover
-the certificate plaintext for crypto inventory and discovery.
+Verification order:
+  1. Header counter match  — P0 and P1 must agree on which ciphertext byte
+     range is the header (same binding property as the body-block check).
+  2. Header type check     — decrypt the header UNDER MPC and confirm its
+     first byte is 0x0B (Certificate). Nothing about the header is
+     revealed except this one bit.
+  3. Body counter match    — as in (1), but for the certificate body
+     blocks.
+  4. Keystream reveal      — only if all three checks pass, AES(K, CTR_i)
+     is computed and revealed for each body block.
+
+P1 XORs each revealed keystream with the corresponding ciphertext block to
+recover the certificate plaintext for crypto inventory and discovery.
 """
 
 from circuit import Circuit
 
 sb128 = sbits.get_type(128)
 
-n = int(program.args[1]) if len(program.args) > 1 else 4
-print_ln("Certificate spans %s AES-GCM block(s)", n)
+CERT_MSG_TYPE = 0x0B
 
-CTR_c  = Array(n, sb128)
-CTR_mb = Array(n, sb128)
+n      = int(program.args[1]) if len(program.args) > 1 else 4
+CT_HDR = int(program.args[2]) if len(program.args) > 2 else 0
+print_ln("Certificate claimed to span %s AES-GCM block(s)", n)
 
-@for_range(n)
-def _(i):
-    CTR_c[i]  = sb128.get_input_from(0)
-    CTR_mb[i] = sb128.get_input_from(1)
+CTR_hdr_c  = sb128.get_input_from(0)
+CTR_hdr_mb = sb128.get_input_from(1)
 
 
 def all_counters_match(CTR_c, CTR_mb, n):
@@ -54,18 +83,49 @@ def all_counters_match(CTR_c, CTR_mb, n):
     return ok.reveal()
 
 
-match = all_counters_match(CTR_c, CTR_mb, n)
-print_ln("Counter verification result: %s", match)
-
-@if_e(match == 1)
+@if_e(CTR_hdr_c.equal(CTR_hdr_mb).reveal())
 def _():
     K = sb128.get_input_from(0)
     aes128 = Circuit('aes_128')
-    @for_range(n)
-    def _(i):
-        keystream = aes128(sbitvec([K]), sbitvec([CTR_mb[i]]))
-        result = keystream.elements()[0].reveal()
-        print_ln("Keystream block %s: %s", i, result)
+
+    # Decrypt the handshake header under MPC. Nothing here is revealed yet.
+    hdr_keystream = aes128(sbitvec([K]), sbitvec([CTR_hdr_mb])).elements()[0]
+    hdr_plaintext = hdr_keystream ^ sb128(CT_HDR)
+
+    # Isolate the top byte (msg_type) without revealing the rest of the header.
+    type_mask     = sb128(0xFF << 120)
+    expected_type = sb128(CERT_MSG_TYPE << 120)
+    type_ok = (hdr_plaintext & type_mask).equal(expected_type).reveal()
+
+    @if_e(type_ok)
+    def _():
+        print_ln("Header verified: handshake message type is Certificate (0x0B)")
+
+        CTR_c  = Array(n, sb128)
+        CTR_mb = Array(n, sb128)
+
+        @for_range(n)
+        def _(i):
+            CTR_c[i]  = sb128.get_input_from(0)
+            CTR_mb[i] = sb128.get_input_from(1)
+
+        match = all_counters_match(CTR_c, CTR_mb, n)
+        print_ln("Counter verification result: %s", match)
+
+        @if_e(match == 1)
+        def _():
+            @for_range(n)
+            def _(i):
+                keystream = aes128(sbitvec([K]), sbitvec([CTR_mb[i]]))
+                result = keystream.elements()[0].reveal()
+                print_ln("Keystream block %s: %s", i, result)
+        @else_
+        def _():
+            print_ln("Aborting: counter mismatch detected — cannot issue keystream")
+    @else_
+    def _():
+        print_ln("Aborting: claimed block(s) are not a Certificate message "
+                 "(handshake header check failed) — cannot issue keystream")
 @else_
 def _():
-    print_ln("Aborting: counter mismatch detected — cannot issue keystream")
+    print_ln("Aborting: header counter mismatch — cannot verify message type")
