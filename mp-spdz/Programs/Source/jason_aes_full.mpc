@@ -1,0 +1,70 @@
+"""
+Full FIMBs evaluation-phase MPC program (paper Section 4.4).
+
+Implements the complete check set on the evaluation vector
+    t = (IV_0, IV_j1, ..., IV_jL, 0)
+i.e. the session nonce for the authentication-tag keystream k0, the L
+per-block nonces for the blocks under inspection, and the zero-block used
+to derive H = E_K(0). For every element of t, the protocol performs:
+
+    (1) Boolean check   X = Y            (client's vs. MB's nonce match)
+    (2) AES block cipher E_X(Y) -> Z     (keystream / H / k0 derivation)
+
+only revealing the AES outputs if every boolean check in (1) passed.
+
+This gives (L+2) boolean checks and (L+2) AES evaluations per session,
+matching the cost model reported in the paper (approximately "k boolean
+checks and k+2 AES evaluations" for L=k inspected message blocks).
+
+Public input: L, the number of message blocks under inspection.
+P0 (client) inputs (in order): T_c[0..L+1] (IV_0, IV_1..IV_L, 0), then K.
+P1 (MB)     inputs (in order): T_mb[0..L+1] (same nonces, from the wire).
+"""
+
+from circuit import Circuit
+
+sb128 = sbits.get_type(128)
+
+MAX_ITEMS = 18  # supports up to 16 inspected blocks + IV_0 + zero-block
+
+L = public_input()
+m = L + 2
+print_ln("Inspecting %s block(s); evaluation vector has %s item(s)", L, m)
+
+T_c  = Array(MAX_ITEMS, sb128)
+T_mb = Array(MAX_ITEMS, sb128)
+
+@for_range(m)
+def _(i):
+    T_c[i]  = sb128.get_input_from(0)
+    T_mb[i] = sb128.get_input_from(1)
+
+
+def all_match(T_c, T_mb, m):
+    ok = MemValue(1)
+    @for_range(m)
+    def _(i):
+        @if_e(T_c[i].equal(T_mb[i]).reveal())
+        def _():
+            print_ln("Item %s: nonce verified", i)
+        @else_
+        def _():
+            print_ln("Item %s: nonce MISMATCH", i)
+            ok.write(0)
+    return ok.reveal()
+
+
+match = all_match(T_c, T_mb, m)
+print_ln("Boolean check result: %s", match)
+
+@if_e(match == 1)
+def _():
+    Key = sb128.get_input_from(0)
+    aes128 = Circuit('aes_128')
+    @for_range(m)
+    def _(i):
+        z = aes128(sbitvec([Key]), sbitvec([T_mb[i]])).elements()[0].reveal()
+        print_ln("Output %s: %s", i, z)
+@else_
+def _():
+    print_ln("Aborting: nonce mismatch detected")

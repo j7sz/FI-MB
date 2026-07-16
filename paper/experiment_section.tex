@@ -1,0 +1,194 @@
+% ============================================================
+% Revised "Performance Evaluation" section for Fire & Ice (FIMBs)
+% Drop-in replacement/extension for the current Section 6.
+%
+% New material relative to the submitted draft is marked with
+% "% NEW:" comments so it is easy to find during merge. Figures 2-4
+% (session-count comparisons against ZKMBs) are retained from the
+% original draft by reference -- we did not have the ZKMBs
+% implementation available to re-run those comparisons, so their
+% numbers are kept as reported, with the ZKMBs methodology note
+% preserved. Table 2 (the block-count micro-benchmark) is
+% reproduced independently on different hardware; see the
+% Reproducibility subsection for what changed and why.
+% ============================================================
+
+\section{Performance Evaluation}
+\label{sec:evaluation}
+
+\subsection{Implementation and Experimental Setup}
+\label{sec:eval-setup}
+
+Our implementation extensively leverages existing frameworks. For the
+TLS protocol we use \texttt{tlslite-ng}~\cite{tlslite-ng}. For
+AES-128-GCM, we use the client-side keystream extraction described in
+\S\ref{sec:fimbs} to produce the inputs consumed by the MPC. For MPC, we
+rely on MP-SPDZ~\cite{Keller2020MPSPDZ}, using its semi-honest
+two-party protocol (\texttt{semi-party.x}). Most of the code is written
+in Python, with source from ZKMBs~\cite{Grubbs2022ZKMB} reused for the
+application-level experiments (HTTP firewalling and encrypted DNS
+filtering). Source code is available at
+\url{https://github.com/FI-MB/FIMB}.
+
+% NEW: primary vs. reproduction environment, spelled out explicitly.
+Two environments are used in this evaluation:
+
+\begin{itemize}
+  \item \textbf{Primary environment (E1).} An 8-core 3.8\,GHz AMD Ryzen
+  7 7840HS laptop with 8\,GB RAM running Ubuntu, used to obtain the
+  headline numbers reported below and in Figures~\ref{fig:sessions-new}--\ref{fig:dot}.
+  \item \textbf{Independent reproduction environment (E2).} A 4-core
+  2.8\,GHz Intel Xeon cloud instance with 16\,GB RAM, used solely to
+  independently re-run the block-count micro-benchmark
+  (\S\ref{sec:eval-microbench}) as a reproducibility check. E2 is not
+  used for the session-count comparisons against ZKMBs, since we did
+  not have a ZKMBs deployment available on that host.
+\end{itemize}
+
+\subsection{Metrics and Methodology}
+\label{sec:eval-methodology}
+
+We separate three costs that are conflated in casual reporting of
+MPC-based systems: (i) \emph{one-time setup}, performed once when a
+client joins the network; (ii) \emph{per-session establishment}, the
+standard TLS handshake, whose cost is unrelated to FIMBs and is not
+re-measured here; and (iii) \emph{per-evaluation cost}, the wall-clock
+time of the MPC evaluation phase (\S4.4) for a given number of
+inspected blocks $L$, measured end-to-end via
+\texttt{Scripts/semi.sh} with both parties on \texttt{localhost}.
+Unless noted otherwise, every per-evaluation number below is the mean
+of $\geq 5$ independent trials; we also record the standard deviation
+and range to characterize run-to-run jitter, which on E2 was
+consistently under $10\%$ of the mean.
+
+\subsection{Evaluation-Phase Micro-benchmark}
+\label{sec:eval-microbench}
+
+The computational cost of the evaluation phase is linear in the number
+of inspected blocks. Section~4.4 specifies two checks over the vector
+$\vec t = (IV_0, IV_{j_1}, \ldots, IV_{j_L}, 0)$: a boolean equality
+check and an AES block-cipher evaluation, for \emph{every} element of
+$\vec t$ -- i.e. $(L+2)$ boolean checks and $(L+2)$ AES evaluations per
+session, where the constant $+2$ term accounts for the authentication
+keystream $k_0 = E_K(IV_0)$ and the tag-derivation constant $H =
+E_K(0)$, each needed once per record regardless of how many blocks
+$L$ within it are inspected.
+
+% NEW: reproducibility finding -- flag the discrepancy plainly.
+\textbf{A reproducibility note.} The publicly released MPC program
+benchmarked for Table~\ref{tab:microbench} implements only the
+$L$-term of this cost -- $L$ boolean checks and $L$ AES evaluations,
+without revealing $H$ or $k_0$ -- so it does not yet perform the tag
+binding check described in \S3.3.4/\S4.4. We re-implemented the
+complete $(L+2)$-item protocol (source:
+\texttt{jason\_aes\_full.mpc} in the artifact) and benchmarked both
+variants on E2 for direct comparison. Table~\ref{tab:microbench}
+reports all three: the original paper's E1 numbers, our reproduction
+of the \emph{partial} ($L$-only) protocol on E2, and our
+implementation of the \emph{complete} $(L+2)$ protocol on E2.
+
+\begin{table}[t]
+\centering
+\caption{Evaluation-phase wall-clock time (ms) vs.\ number of inspected
+blocks $L$. E1 = original draft, 8-core AMD Ryzen 7 7840HS. E2 =
+independent reproduction, 4-core Intel Xeon 2.8\,GHz; mean of 7 trials,
+std.\ dev.\ in parentheses.}
+\label{tab:microbench}
+\begin{tabular}{lccccccc}
+\toprule
+$L$ & 1 & 2 & 3 & 4 & 5 & 6 & 7 \\
+\midrule
+E1, partial ($L$ AES) & 296 & 391 & 488 & 586 & 676 & 765 & 867 \\
+E2, partial ($L$ AES) & 322 (14) & 428 (9) & 554 (22) & 685 (30) & 780 (20) & 894 (26) & 990 (37) \\
+E2, complete ($L{+}2$ AES) & 555 (16) & 655 (16) & 767 (18) & 907 (36) & 1042 (27) & 1120 (50) & 1316 (87) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The E2 reproduction of the partial protocol tracks the original E1
+numbers closely (within $9$--$15\%$, consistent with the weaker
+core count and clock speed of E2), confirming the reported linear
+trend of $\approx 90$--$130$\,ms per additional block is reproducible
+across hardware. The complete $(L+2)$ protocol adds a roughly constant
+$213$--$326$\,ms (mean $\approx 244$\,ms) on top of the partial
+protocol at every $L$, matching the expectation that the $+2$ term
+contributes a fixed, $L$-independent overhead. \textbf{We recommend
+the camera-ready version report the complete-protocol numbers (or
+explicitly scope the reported table to the partial protocol and note
+that the tag-binding check of \S4.4 is left for the reader/deployer to
+add), so that the reported cost matches the security guarantee
+claimed in the text.}
+
+\subsection{HTTP Firewalling}
+\label{sec:eval-http}
+
+For HTTP firewalling, inspecting the HTTP request version typically
+requires $1$--$2$ blocks (\S5.1). Using the partial-protocol numbers,
+this corresponds to $\approx 300$--$400$\,ms; using the complete
+protocol (\S\ref{sec:eval-microbench}), it corresponds to
+$\approx 555$--$655$\,ms on E2. Figures~\ref{fig:sessions-new}
+and~\ref{fig:sessions-resumed} summarize the per-session overhead for
+distinct HTTPS websites and for session resumption against the same
+website, respectively, compared against ZKMBs using AES-128-GCM and
+ChaCha20/Poly1305. FIMBs remain consistently low across all $30$
+sessions in both scenarios, while ZKMBs incur a per-session setup and
+proof-generation cost that grows linearly, surpassing $600$ seconds
+by the 30th distinct-website session.
+
+\subsection{Encrypted DNS Filtering}
+\label{sec:eval-dns}
+
+DNS requests in the blocklist used for evaluation~\cite{blocklist}
+range from $6$ to $86$ bytes, corresponding to $1$--$6$ blocks. For
+DoH over HTTP GET/POST, an additional block is required to determine
+the request method (\S5.2), giving $k+1$ blocks in total. Using the
+partial-protocol numbers this spans $\approx 300$--$900$\,ms; using
+the complete protocol it spans $\approx 555$--$1316$\,ms on E2.
+Figure~\ref{fig:dot} illustrates the DoT case after the initial TLS
+session is established: ZKMBs with ChaCha20/Poly1305 (their
+better-performing configuration) still incur substantially higher
+overhead than FIMBs across all $30$ queries.
+
+\subsection{Comparison with ZKMBs}
+\label{sec:eval-zkmb}
+
+The ZKMBs figures in this evaluation are conservative estimates
+derived from the performance numbers reported for the same
+applications (HTTP firewalling, DNS filtering) in the original
+work~\cite{Grubbs2022ZKMB} and its follow-up~\cite{Zhang2024Zombie}; we
+did not have a ZKMBs deployment available to re-run head-to-head on
+identical hardware, and we flag this as a limitation rather than
+present it as a controlled comparison. Under a blocklist of two
+million domains~\cite{blocklist}, ZKMBs require an initial setup of
+approximately two hours on first connection; subsequent session
+resumption reduces this to $\approx 3$ seconds per proof generation,
+with $2$--$5$\,ms verification. FIMBs, by contrast, require a
+one-time $\approx 3$-second setup independent of blocklist size, and
+$\approx 300$--$1300$\,ms per evaluation depending on block count and
+whether the complete tag-binding check (\S\ref{sec:eval-microbench})
+is included.
+
+% NEW: caveat on the "~3s one-time setup" claim.
+\textbf{A note on the one-time setup figure.} We were not able to
+independently attribute the reported $\approx 3$-second one-time setup
+cost to a specific, benchmarkable step in the released artifact --
+the SSL identity exchange step alone (\texttt{Scripts/setup-ssl.sh},
+two RSA/x509 identities) measures under half a second on E2. We
+recommend the camera-ready version give an explicit breakdown of what
+this figure includes (e.g.\ MPC preprocessing material generation,
+policy download, or browser-extension installation), both for
+reviewer confidence and for artifact reproducibility.
+
+\subsection{Reproducibility Artifact}
+\label{sec:eval-repro}
+
+To support independent verification of Table~\ref{tab:microbench}, the
+artifact includes two MP-SPDZ programs and matching benchmark
+harnesses: \texttt{jason\_aes3.mpc} (partial protocol, $L$ boolean
+checks and $L$ AES evaluations) and \texttt{jason\_aes\_full.mpc}
+(complete protocol, $(L+2)$ boolean checks and $(L+2)$ AES
+evaluations over $\vec t = (IV_0, IV_{j_1}, \ldots, IV_{j_L}, 0)$),
+along with \texttt{benchmark\_jason\_aes3.py} and
+\texttt{benchmark\_jason\_aes\_full.py}, which compile each program
+once and time $\geq 5$ trials per block count $L \in \{1,\ldots,7\}$
+end-to-end via \texttt{Scripts/semi.sh}.

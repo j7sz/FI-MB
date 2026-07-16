@@ -1,0 +1,25 @@
+Using statistical security parameter 40
+Inspecting 7 block(s); evaluation vector has 9 item(s)
+Item 0: nonce verified
+Item 1: nonce verified
+Item 2: nonce verified
+Item 3: nonce verified
+Item 4: nonce verified
+Item 5: nonce verified
+Item 6: nonce verified
+Item 7: nonce verified
+Item 8: nonce verified
+Boolean check result: 1
+Output 0: -80654536333160952351739990173135389064
+Output 1: -88361534732083927860309049166854670645
+Output 2: -82870769061090606230915710468138020754
+Output 3: -35859459343947885285265028314407815684
+Output 4: -28752958783085001210524527535323302059
+Output 5: -86960927871638224745381244070287373827
+Output 6: -8557194561524660042409519033462522595
+Output 7: 9705425249238098547124091294297755481
+Output 8: -76258062899631674787599900362736609159
+The following benchmarks are including preprocessing (offline phase).
+Time = 1.11876 seconds 
+Data sent = 1.15013 MB in ~4080 rounds (party 0 only; use '-v' for more details)
+Global data sent = 2.30025 MB (all parties)
